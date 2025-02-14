@@ -50,17 +50,39 @@ app.post('/signin', async (req, res) => {
         res.status(500).send('Error: ' + err.message);
     }
 });
-const directoryData = [
-    { id: 1, name: "Room 538", type: "Classroom",  floor: "32" },
-    { id: 2, name: "Instructor Office 538", type: "Instructor Office",  floor: "65" },
-    { id: 3, name: "Lab 202", type: "Classroom",  floor: "2" },
-    { id: 4, name: "Instructor Office 105", type: "Instructor Office", floor: "1" }
-  ];
   
   // API to fetch directory data
-  app.get("/directory", (req, res) => {
-    res.json(directoryData);
-  });
+  app.get("/directory", async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT id, ar_name, en_name, type, floor, room_number 
+            FROM rooms
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+//add new rooms
+app.post("/directory", async (req, res) => {
+    const { ar_name,en_name, type, floor, room_number } = req.body;
+    if (!ar_name||!en_name|| !type || !floor || !room_number) {
+        return res.status(400).json({ error: "All fields are required" });
+    }
+    try {
+        const result = await pool.query(`
+            INSERT INTO rooms (ar_name,en_name, type, floor, room_number) 
+            VALUES ($1, $2, $3, $4, $5) RETURNING *
+        `, [ar_name,en_name, type, floor, room_number]);
+        res.status(201).json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
 const port = 5000;
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
