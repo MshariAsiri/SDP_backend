@@ -8,17 +8,33 @@ const app = express();
 app.use(bodyParser.json());
 app.use(cors());
 
+//const pool = new Pool({
+//    user: 'postgres',
+//    host: 'localhost',
+//    database: 'SDP',
+//    password: '123',
+//    port: 5432,
+//});
 const pool = new Pool({
-    user: 'postgres', // Replace with your PostgreSQL username
-    host: 'localhost',
-    database: 'SDP', // Replace with your database name
-    password: '123', // Replace with your PostgreSQL password
-    port: 5432,
+    connectionString: process.env.DATABASE_URL || 'postgresql://msh:dvaVyWBTsdUiXAqIBFM7XnsVdmdMRTqY@dpg-cvg1cf5umphs73dddkk0-a.frankfurt-postgres.render.com/sdp_fhdm',
+    ssl: {
+        rejectUnauthorized: false, // Required for Render
+    }
 });
+// Helper function to check if a user is an admin
+const isAdmin = async (email) => {
+    try {
+        const result = await pool.query('SELECT role FROM users WHERE email = $1', [email]);
+        return result.rows.length > 0 && result.rows[0].role === 'admin';
+    } catch (err) {
+        console.error('Error checking admin status:', err);
+        return false; // Assume not admin on error to prevent accidental access
+    }
+};
 
 // Route to create a new account
 app.post('/signup', async (req, res) => {
-    const { username, email, password, role = 'user' } = req.body; // Default role is 'user'
+    const { username, email, password, role = 'user' } = req.body;
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
         await pool.query(
@@ -31,7 +47,6 @@ app.post('/signup', async (req, res) => {
     }
 });
 
-
 // Route to log in
 app.post('/signin', async (req, res) => {
     const { email, password } = req.body;
@@ -42,7 +57,7 @@ app.post('/signin', async (req, res) => {
             if (validPassword) {
                 res.status(200).json({
                     message: "Login successful",
-                    role: user.rows[0].role // Ensure role is sent
+                    role: user.rows[0].role
                 });
             } else {
                 res.status(400).send('Invalid credentials');
@@ -55,14 +70,12 @@ app.post('/signin', async (req, res) => {
     }
 });
 
-
-  
-  // API to fetch directory data
-  app.get("/directory", async (req, res) => {
+// API to fetch directory data
+app.get("/directory", async (req, res) => {
     try {
         const result = await pool.query(`
-            SELECT id, ar_name, en_name, type, floor, room_number 
-            FROM rooms
+                SELECT id, ar_name, en_name, type, floor, room_number, x, y
+                FROM rooms
         `);
         res.json(result.rows);
     } catch (err) {
@@ -71,7 +84,7 @@ app.post('/signin', async (req, res) => {
 });
 
 
-//add new rooms
+// Route to add a new room (ALL USERS)
 app.post("/directory", async (req, res) => {
     const { ar_name, en_name, type, floor, room_number, x, y } = req.body;
 
@@ -79,28 +92,11 @@ app.post("/directory", async (req, res) => {
         return res.status(400).json({ error: "All fields are required" });
     }
 
-    let id;
-    let isIdUnique = false;
-
-    while (!isIdUnique) {
-        id = Math.floor(Math.random() * 1000); // Generate a random integer
-
-        try {
-            const checkQuery = await pool.query('SELECT id FROM rooms WHERE id = $1', [id]);
-            if (checkQuery.rows.length === 0) {
-                isIdUnique = true;
-            }
-        } catch (err) {
-            return res.status(500).json({ error: err.message });
-        }
-    }
-
     try {
         const result = await pool.query(`
-            INSERT INTO rooms (id, ar_name, en_name, type, floor, room_number, x, y) 
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *
-        `, [id, ar_name, en_name, type, floor, room_number, x, y]);
-
+                INSERT INTO rooms (ar_name, en_name, type, floor, room_number, x, y) 
+                VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
+        `, [ar_name, en_name, type, floor, room_number, x, y]);
         res.status(201).json(result.rows[0]);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -114,7 +110,7 @@ app.get('/getUserRole', async (req, res) => {
     try {
         const result = await pool.query('SELECT role FROM users WHERE email = $1', [email]);
         if (result.rows.length > 0) {
-            res.send(result.rows[0].role); // Return role as plain text
+            res.send(result.rows[0].role);
         } else {
             res.status(404).send('User not found');
         }
@@ -123,9 +119,54 @@ app.get('/getUserRole', async (req, res) => {
     }
 });
 
+// Route to delete a room by ID (ALL USERS)
+app.delete("/directory/:id", async (req, res) => {
+    const id = req.params.id;
 
+    try {
+        const result = await pool.query(`
+                DELETE FROM rooms
+                WHERE id = $1
+                RETURNING *
+        `, [id]);
 
-const port = 5000;
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Room not found" });
+        }
+        res.status(200).json({ message: "Room deleted successfully" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Route to update a room by ID (ALL USERS)
+app.put("/directory/:id", async (req, res) => {
+    const id = req.params.id;
+    const { ar_name, en_name, type, floor, room_number, x, y } = req.body;
+
+    if (!ar_name || !en_name || !type || !floor || !room_number || !x || !y) {
+        return res.status(400).json({ error: "All fields are required" });
+    }
+
+    try {
+        const result = await pool.query(`
+                UPDATE rooms 
+                SET ar_name = $1, en_name = $2, type = $3, floor = $4, room_number = $5, x = $6, y = $7
+                WHERE id = $8
+                RETURNING *
+        `, [ar_name, en_name, type, floor, room_number, x, y, id]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Room not found" });
+        }
+
+        res.status(200).json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+const port = process.env.PORT || 5000;
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
 });
